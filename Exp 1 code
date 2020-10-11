@@ -1,0 +1,162 @@
+
+
+head(data1)
+
+#Remove sci notation
+options(scipen=999)# turn off scientific notation
+
+#####Data organising####
+data1$light <- factor(data1$light,
+                       levels = c("broad", "blue", "green", "yellow", "red")) #Set levels in order
+data1$nm <- as.numeric(as.character(data1$nm))
+data1$suc <- as.numeric(data1$suc)
+data1$tot <- as.numeric(as.character(data1$tot)) 
+data1$perc = data1$suc/data1$tot*100
+data1$prop = data1$suc/data1$tot
+#data1$count.t2 <- as.numeric(as.character(data1$count.t2)) 
+#data1$perc.t2 = data1$count.t2/data1$tot*100
+data1$obs <- factor(formatC(1:nrow(data1), flag="0", width=3))# Create observation row
+#Obs=data1$observation
+#Dep=data1$Dep 
+head(data1)
+str(data1)
+#write.csv(data1,'Fig1b.csv')
+
+source("https://raw.githubusercontent.com/gerard-ricardo/data/master/theme_sleek1")
+
+####Column statistics####
+#Comside=aggregate(Settled ~ Replicate+Nominal, data = data1, sum) #Total settlement/prism
+# summary.t1=aggregate(perc ~ light+time, data = data1, mean) #Mean settlement/nomianl
+# sd.t1=aggregate(perc ~ light+time, data = data1, sd) #SD settlement/nomianl
+# se.t1=(sd.t1$perc)/sqrt(5) #Stand. error usig 5 reps
+# summary.t1$se.t1=se.t1
+# summary.t1$se.up = summary.t1$perc + summary.t1$se.t1
+# summary.t1$se.lo = summary.t1$perc - summary.t1$se.t1
+# summary.t1$blah = summary.t1$perc - 20
+# summary.t1   #means and sems of the t1
+# by.time = split(data1, data1$time)
+# data.12 = by.time$'12h'
+# data.24 = by.time$'24h'
+
+####################################################
+#Basic GLM, used for comparison
+# md1 <- glm(cbind(suc,(tot - suc)) ~ light +time, family = binomial (link = logit),data = data1)
+# md1.12 <- glm(cbind(suc,(tot - suc)) ~ light, family = binomial (link = logit),data = data.12)
+# exp.df <- expand.grid(light       = levels(data.12$light),time      = levels(data.12$time))
+# mm <- model.matrix(~light+time,data = exp.df)  # build model matrix to sub the parameters into the equation
+# pred.logit <- mm %*% coef(md1)
+# prediction  <- exp(pred.logit) / (1 + exp(pred.logit))
+# se    <- sqrt(diag(mm %*% vcov(md1) %*% t(mm)))
+# upper  <- exp(eta + 1.96 *se) / (1 + exp(eta  + 1.96 *se))
+# lower  <- exp(eta - 1.96 *se) / (1 + exp(eta  - 1.96 *se))
+
+#######################################
+#binomial GLMM - switched off for speed
+# md3 <- glmer(cbind(suc,(tot - suc)) ~ light*time  + (1|obs) , family = binomial (link = logit),data = data1) #failed to converge
+
+##########################################
+#Betabinomial - switched off for speed
+# library(glmmTMB)
+# md4.int <- glmmTMB(cbind(suc,(tot - suc)) ~ light*time  + (1|obs), family='betabinomial', data= data1)
+# md4.add <- glmmTMB(cbind(suc,(tot - suc)) ~ light+time  + (1|obs), family='betabinomial', data= data1)
+# anova(md4.int, md4.add)  #no evidence of interactive effect
+# summary(md4.add)
+# exp.df <- expand.grid(light       = levels(data1$light),time      = levels(data1$time))
+# mm <- model.matrix(~light+time,data = exp.df)  # build model matrix to sub the parameters into the equation
+# pred.logit <- mm %*% fixef(md4.add)$cond
+# prediction  <- exp(pred.logit) / (1 + exp(pred.logit))
+# se    <- sqrt(diag(mm %*% vcov(md4.add)$cond %*% t(mm)))
+# upper  <- exp(eta + 1.96 *se) / (1 + exp(eta  + 1.96 *se))
+# lower  <- exp(eta - 1.96 *se) / (1 + exp(eta  - 1.96 *se))
+# library(emmeans)
+# emmeans (md4.add,  ~ light | time, type = "response")  #response on real scale
+# contrast(emmeans(md4.add,  ~ light | time), "trt.vs.ctrl1", ref = "broad") #Dunnetts
+
+################################
+# #Bayesian binomial GLMM
+library(brms)
+#Interactive bayes GLMM - switched off for speed
+md8.int <- brm ( suc | trials(tot)~ light*time +(time|obs), data=data1,
+             family="binomial"(link="logit"), chains=3, iter=3000, warmup=500,
+             prior=c(set_prior ("cauchy (0, 2.5)", class="b")), control = list(adapt_delta = 0.999, max_treedepth = 15))
+md8.int <- add_criterion(md8.int, "waic")
+
+md8.add <- brm ( suc | trials(tot)~ light+time +(time|obs), data=data1,
+             family="binomial"(link="logit"), chains=3, iter=3000, warmup=500,
+             prior=c(set_prior ("cauchy (0, 2.5)", class="b")),control = list(adapt_delta = 0.999, max_treedepth = 15))
+md8.add <- add_criterion(md8.add, "waic")
+
+#Model selection
+loo_compare(md8.int, md8.add, criterion = "waic")  # uppermost position best
+
+#save(md8.add, file = "2018 mono mil.Rdata")
+load('2018 mono mil.Rdata')
+
+######Model diagnostics##########
+plot(md8.add)  
+bayes_R2(md8.add)
+launch_shinystan(md8.add)
+pp_check(md8.add, nsamples = 100)
+library(dplyr)
+library(tidybayes)
+library(ggplot2)
+data1 %>%
+  add_residual_draws(md8.add) %>%
+  ggplot(aes(x = .row, y = .residual)) +
+  stat_pointinterval()  #residual plot
+
+####Posthoc###########
+library(emmeans)
+df1 = emmeans (md8.add,  ~ light | time, type = "response")  #response on real scale
+cont = contrast(emmeans(md8.add,  ~ light | time), "trt.vs.ctrl", ref = "broad") #Dunnetts
+# cont = contrast(emmeans(md8.add,  ~ light | time), "response", ref = "broad") #Dunnetts
+emmeans (md8.add,  ~  time, type = "response")  #
+cont
+library(dplyr)
+df2 = df1 %>% data.frame()
+library(tidyverse)
+library(tidybayes)
+library(ggplot2)
+cont_posterior <- gather_emmeans_draws(cont)  #as tibble
+plot(density(cont_posterior$.value))
+
+#geom density plots
+levels(cont_posterior$contrast)
+levels(cont_posterior$contrast) <- c("Blue - Broad"  , "Green - Broad" , "Yellow - Broad", "Red - Broad")
+levels(cont_posterior$time) <- c("12 h"  , "24 h")
+
+p1 = ggplot(cont_posterior, aes(x=.value))
+p1 = p1 + stat_pointintervalh(cont_posterior, mapping = aes(x=.value , y = 0.0), na.rm = T)
+p1 = p1 + geom_density(aes(group=contrast, color =contrast , fill=contrast), alpha=0.3)
+p1 = p1 + scale_y_continuous(name ="Posterior probability density") 
+p1 = p1 +facet_wrap(~contrast+time, nrow = 4)+
+  geom_vline(xintercept = 0, color = "red", lty = 2)+ theme_sleek1()+
+  scale_fill_manual( values = c("steelblue2","aquamarine2", "khaki2",'indianred2'))+
+  scale_color_manual( values = c("steelblue3","aquamarine3", "khaki3",'indianred3'))+theme(legend.position="none")
+p1 = p1 + coord_cartesian(ylim = c(0.0, 1.5)) 
+p1 = p1 + scale_x_continuous(name ="Standardized effect size") 
+p1 = p1 + theme(strip.text.x = element_text(colour = "grey30", size = 8,vjust  = -7 ))
+p1 = p1 + theme(panel.spacing.y=unit(-1.5, "lines"))
+p1
+
+#write.csv(cont_posterior,'Fig1c.csv')
+
+#Plot of settlement success
+library(ggplot2)
+
+theme_set(theme_sleek1())
+p2 <- ggplot()
+p2 = p2 + geom_rect(data = data1,aes(fill = time, alpha = 0.9),xmin = -Inf,xmax = Inf, ymin = -Inf,ymax = Inf,alpha = 0.9)
+p2 <- p2 + geom_point(data = data1, aes(x = light, y = prop, color = light),position = position_jitter(width = .02), alpha = 0.50,size = 2) #add data points
+p2 <- p2 + geom_point(data = df2, aes(x = light, y = prob), size = 3.5,   color = 'grey60')
+p2 <- p2 + geom_errorbar(data = df2, aes(x = light, ymax = upper.HPD,  ymin = lower.HPD), color = 'grey60',width=0) #add errorbars
+p2 = p2 + scale_x_discrete(name ="Light quality", label = c("Broad", "Blue", "Green", 'Yellow', 'Red')) 
+p2 = p2 + scale_y_continuous(name ="Larval settlement (prop.)", limits = c(0, 1), breaks = c(0, 0.25, 0.50, 0.75, 1))
+p2 <- p2 +facet_wrap(~time, nrow = 2)
+p2= p2+ theme_sleek1()
+p2 <- p2 + theme(legend.position="none") #remove legend
+p2 <- p2 + scale_color_manual(values=c('grey30',"steelblue3","aquamarine3", "khaki3",'indianred3'))
+p2 = p2+  scale_fill_manual(values=c("white","grey90"))
+p2   
+
+
